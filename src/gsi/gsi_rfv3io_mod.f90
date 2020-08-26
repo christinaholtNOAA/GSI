@@ -14,6 +14,7 @@ module gsi_rfv3io_mod
 !   2019        ting    - modifications for use for ensemble IO and cold start files 
 ! subroutines included:
 !   sub gsi_rfv3io_get_grid_specs
+!   sub gsi_rfv3io_get_soil_levs
 !   sub read_fv3_files 
 !   sub read_fv3_netcdf_guess
 !   sub gsi_fv3ncdf2d_read
@@ -55,10 +56,9 @@ module gsi_rfv3io_mod
   integer(i_kind):: fv3sar_bg_opt=0
   type(type_fv3regfilenameg):: bg_fv3regfilenameg
   integer(i_kind) nx,ny,nz
+  integer(i_kind) n_soil_lev
   real(r_kind),allocatable:: grid_lon(:,:),grid_lont(:,:),grid_lat(:,:),grid_latt(:,:)
   real(r_kind),allocatable:: ak(:),bk(:)
-  integer(i_kind),allocatable:: ijns2d(:),displss2d(:),ijns(:),displss(:)
-  integer(i_kind),allocatable:: ijnz(:),displsz_g(:)
 
 ! set default to private
   private
@@ -68,19 +68,22 @@ module gsi_rfv3io_mod
   public :: gsi_fv3ncdf_read_v1
   public :: gsi_fv3ncdf_readuv
   public :: gsi_fv3ncdf_readuv_v1
+  public :: gsi_rfv3io_get_soil_levs
   public :: read_fv3_files 
   public :: read_fv3_netcdf_guess
   public :: wrfv3_netcdf
   public :: gsi_fv3ncdf2d_read_v1
 
+  public :: grid_spec, ak_bk, dynvars, tracers, sfcdata
   public :: mype_u,mype_v,mype_t,mype_q,mype_p,mype_oz,mype_ql
   public :: k_slmsk,k_tsea,k_vfrac,k_vtype,k_stype,k_zorl,k_smc,k_stc
   public :: k_snwdph,k_f10m,mype_2d,n2d,k_orog,k_psfc
-  public :: ijns,ijns2d,displss,displss2d,ijnz,displsz_g
+  public :: grid_latt,grid_lont
+  public :: n_soil_lev,nx,ny
 
   integer(i_kind) mype_u,mype_v,mype_t,mype_q,mype_p,mype_oz,mype_ql
   integer(i_kind) k_slmsk,k_tsea,k_vfrac,k_vtype,k_stype,k_zorl,k_smc,k_stc
-  integer(i_kind) k_snwdph,k_f10m,mype_2d,n2d,k_orog,k_psfc
+  integer(i_kind) k_snwdph,k_f10m,mype_2d,n2d,k_orog,k_psfc,k_tsoil
   parameter(                   &  
     k_f10m =1,                  &   !fact10
     k_stype=2,                  &   !soil_type
@@ -93,7 +96,8 @@ module gsi_rfv3io_mod
     k_smc  =9,                  &   !soil_moi
     k_slmsk=10,                 &   !isli
     k_orog =11,                 & !terrain
-    n2d=11                   )
+    k_tsoil=12                  & !soilt1
+    n2d=12                   )
 
 contains
   subroutine fv3regfilename_init(this,grid_spec_input,ak_bk_input,dynvars_input, &
@@ -317,11 +321,70 @@ subroutine gsi_rfv3io_get_grid_specs(fv3filenamegin,ierr)
 !!!!!!! setup A grid and interpolation/rotation coeff.
     call generate_anl_grid(nx,ny,grid_lon,grid_lont,grid_lat,grid_latt)
 
-    deallocate (grid_lon,grid_lat,grid_lont,grid_latt)
+    deallocate (grid_lon,grid_lat)
     deallocate (ak,bk,abk_fv3)
 
     return
 end subroutine gsi_rfv3io_get_grid_specs
+
+
+subroutine gsi_rfv3io_get_soil_levs(ierr)
+!$$$  subprogram documentation block
+!                .      .    .                                        .
+! subprogram:    gsi_rfv3io_get_soil_levs
+!   pgrmmr: holt        org: CIRES/CU            date: 2017-04-03
+!
+! abstract:  obtain number of soil levels present in background file
+!
+! program history log:
+!   2019-10-23  holt - initial documentation
+!                    - read in number of soil levels from surface file
+!   input argument list:
+!       None
+!
+!   output argument list:
+!       ierr
+!
+! attributes:
+!   language: f90
+!   machine:
+!
+!$$$ end documentation block
+
+    use mpimod, only: mype
+    use netcdf, only: nf90_open,nf90_close,nf90_get_var,nf90_noerr
+    use netcdf, only: nf90_nowrite,nf90_inquire,nf90_inquire_dimension
+
+    integer(i_kind) ierr,iret,gfile_loc,i,k,dim_size
+    integer(i_kind) ndimensions,nvariables,nattributes,unlimiteddimid
+    character(len=128) :: varname
+
+    ! Open surface data file
+    ierr=0
+    iret=nf90_open(trim(sfcdata),nf90_nowrite,gfile_loc)
+    if(iret/=nf90_noerr) then
+       write(6,*)' problem opening ',trim(grid_spec),', Status = ',iret
+       ierr=1
+       return
+    endif
+
+    iret=nf90_inquire(gfile_loc,ndimensions,nvariables,nattributes,unlimiteddimid)
+    n_soil_lev=0
+    do k=1,ndimensions
+       iret=nf90_inquire_dimension(gfile_loc,k,varname,dim_size)
+       ! Caution: Assuming the only 3d variables in the surface file are the soil
+       ! variables!
+       if(trim(varname)=='zaxis_1') n_soil_lev = dim_size
+    enddo
+    if(n_soil_lev==0) then
+        write(6,*) 'did not find number of soil levels in sfcdata, setting to default n_soil_lev = 6'
+        n_soil_lev = 6
+    endif
+
+    if(mype==0)write(6,*),'n_soil_lev=',n_soil_lev
+
+end subroutine gsi_rfv3io_get_soil_levs
+
 
 subroutine read_fv3_files(mype)
 !$$$  subprogram documentation block
@@ -574,7 +637,7 @@ subroutine read_fv3_netcdf_guess(fv3filenamegin)
 !
 !$$$  end documentation block
     use kinds, only: r_kind,i_kind
-    use mpimod, only: npe
+    use mpimod, only: npe, mype
     use guess_grids, only: ges_tsen,ges_prsi
     use gridmod, only: lat2,lon2,nsig,ijn,eta1_ll,eta2_ll,ijn_s
     use constants, only: one,fv
@@ -582,6 +645,7 @@ subroutine read_fv3_netcdf_guess(fv3filenamegin)
     use gsi_bundlemod, only: gsi_bundlegetpointer
     use mpeu_util, only: die
     use guess_grids, only: ntguessig
+    use rapidrefresh_cldsurf_mod, only: l_gsd_soiltq_nudge
 
     implicit none
 
@@ -594,17 +658,20 @@ subroutine read_fv3_netcdf_guess(fv3filenamegin)
     real(r_kind),dimension(:,:,:),pointer::ges_u=>NULL()
     real(r_kind),dimension(:,:,:),pointer::ges_v=>NULL()
     real(r_kind),dimension(:,:,:),pointer::ges_q=>NULL()
-!   real(r_kind),dimension(:,:,:),pointer::ges_ql=>NULL()
     real(r_kind),dimension(:,:,:),pointer::ges_oz=>NULL()
     real(r_kind),dimension(:,:,:),pointer::ges_tv=>NULL()
-            
-      character(len=:),allocatable :: dynvars   !='fv3_dynvars'
-      character(len=:),allocatable :: tracers   !='fv3_tracer'
-   
+
+    real(r_kind),dimension(:,:,:),pointer::ges_qc=>NULL()
+    real(r_kind),dimension(:,:,:),pointer::ges_qi=>NULL()
+    real(r_kind),dimension(:,:,:),pointer::ges_smois_it=>NULL()
+    real(r_kind),dimension(:,:,:),pointer::ges_tslb_it=>NULL()
+
+    character(len=:),allocatable :: dynvars   !='fv3_dynvars'
+    character(len=:),allocatable :: tracers   !='fv3_tracer'
 
 
-     dynvars= fv3filenamegin%dynvars
-     tracers= fv3filenamegin%tracers
+    dynvars= fv3filenamegin%dynvars
+    tracers= fv3filenamegin%tracers
 
     if(npe< 8) then
        call die('read_fv3_netcdf_guess','not enough PEs to read in fv3 fields' )
@@ -618,26 +685,8 @@ subroutine read_fv3_netcdf_guess(fv3filenamegin)
     mype_oz=6
     mype_2d=7 
       
-    allocate(ijns(npe),ijns2d(npe),ijnz(npe) )
-    allocate(displss(npe),displss2d(npe),displsz_g(npe) )
-
-    do i=1,npe
-       ijns(i)=ijn_s(i)*nsig
-       ijnz(i)=ijn(i)*nsig
-       ijns2d(i)=ijn_s(i)*n2d 
-    enddo
-    displss(1)=0
-    displsz_g(1)=0
-    displss2d(1)=0
-    do i=2,npe
-       displss(i)=displss(i-1)+ ijns(i-1)
-       displsz_g(i)=displsz_g(i-1)+ ijnz(i-1)
-       displss2d(i)=displss2d(i-1)+ ijns2d(i-1)
-    enddo
-
 !   do it=1,nfldsig
     it=ntguessig
-
 
     ier=0
     call GSI_BundleGetPointer ( GSI_MetGuess_Bundle(it), 'ps' ,ges_ps ,istatus );ier=ier+istatus
@@ -646,7 +695,6 @@ subroutine read_fv3_netcdf_guess(fv3filenamegin)
     call GSI_BundleGetPointer ( GSI_MetGuess_Bundle(it), 'v' , ges_v ,istatus );ier=ier+istatus
     call GSI_BundleGetPointer ( GSI_MetGuess_Bundle(it), 'tv' ,ges_tv ,istatus );ier=ier+istatus
     call GSI_BundleGetPointer ( GSI_MetGuess_Bundle(it), 'q'  ,ges_q ,istatus );ier=ier+istatus
-!   call GSI_BundleGetPointer ( GSI_MetGuess_Bundle(it), 'ql'  ,ges_ql ,istatus );ier=ier+istatus
     call GSI_BundleGetPointer ( GSI_MetGuess_Bundle(it), 'oz'  ,ges_oz ,istatus );ier=ier+istatus
     if (ier/=0) call die(trim(myname),'cannot get pointers for fv3 met-fields, ier =',ier)
      
@@ -675,10 +723,6 @@ subroutine read_fv3_netcdf_guess(fv3filenamegin)
          ges_prsi(:,:,k,it)=eta1_ll(k)+eta2_ll(k)*ges_ps  
        enddo
     endif
-    
-
-
-
 
     if( fv3sar_bg_opt == 0) then 
       call gsi_fv3ncdf_read(tracers,'SPHUM','sphum',ges_q,mype_q)
@@ -687,6 +731,19 @@ subroutine read_fv3_netcdf_guess(fv3filenamegin)
     else
       call gsi_fv3ncdf_read_v1(tracers,'sphum','SPHUM',ges_q,mype_q)
       call gsi_fv3ncdf_read_v1(tracers,'o3mr','O3MR',ges_oz,mype_oz)
+    endif
+
+    if (l_gsd_soiltq_nudge) then
+      call GSI_BundleGetPointer ( GSI_MetGuess_Bundle(it), 'ql',     ges_qc, istatus );ier=ier+istatus
+      call GSI_BundleGetPointer ( GSI_MetGuess_Bundle(it), 'qi',     ges_qi, istatus );ier=ier+istatus
+      call GSI_BundleGetPointer ( GSI_MetGuess_Bundle(it), 'smoist', ges_smois_it, istatus );ier=ier+istatus
+      call GSI_BundleGetPointer ( GSI_MetGuess_Bundle(it), 'tslb',   ges_tslb_it, istatus );ier=ier+istatus
+
+
+      call gsi_fv3ncdf_read(tracers, 'LIQ_WAT', 'liq_wat', ges_qc, mype_ql)
+      call gsi_fv3ncdf_read(tracers, 'ICE_WAT', 'ice_wat', ges_qi, 8)
+      call gsi_fv3ncdf_read(sfcdata, 'SMOIS',   'smois',   ges_smois_it, 9, .false.)
+      call gsi_fv3ncdf_read(sfcdata, 'TSLB',    'tslb',    ges_tslb_it, 10, .false.)
     endif
 
 !!  tsen2tv  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
@@ -698,7 +755,7 @@ subroutine read_fv3_netcdf_guess(fv3filenamegin)
        enddo
     enddo
 
-    call gsi_fv3ncdf2d_read(fv3filenamegin,it,ges_z)
+   call gsi_fv3ncdf2d_read(fv3filenamegin,it,ges_z)
 
 end subroutine read_fv3_netcdf_guess
 
@@ -726,13 +783,16 @@ subroutine gsi_fv3ncdf2d_read(fv3filenamegin,it,ges_z)
     use mpimod, only: ierror,mpi_comm_world,npe,mpi_rtype,mype
     use guess_grids, only: fact10,soil_type,veg_frac,veg_type,sfc_rough, &
          sfct,sno,soil_temp,soil_moi,isli
-    use gridmod, only: lat2,lon2,itotsub,ijn_s
+    use gridmod, only: lat2,lon2,itotsub,ijn_s,nlon,nlat
     use general_commvars_mod, only: ltosi_s,ltosj_s
     use netcdf, only: nf90_open,nf90_close,nf90_get_var,nf90_noerr
     use netcdf, only: nf90_nowrite,nf90_inquire,nf90_inquire_dimension
     use netcdf, only: nf90_inquire_variable
-    use mod_fv3_lola, only: fv3_h_to_ll,nxa,nya
+    use mod_fv3_lola, only: fv3_h_to_ll
     use constants, only: grav
+    use rapidrefresh_cldsurf_mod, only: l_gsd_soiltq_nudge
+    use gsi_metguess_mod, only: gsi_metguess_bundle
+    use gsi_bundlemod, only: gsi_bundlegetpointer
 
     implicit none
 
@@ -745,8 +805,8 @@ subroutine gsi_fv3ncdf2d_read(fv3filenamegin,it,ges_z)
     real(r_kind),allocatable,dimension(:,:):: a
     real(r_kind),allocatable,dimension(:,:,:):: sfcn2d
     real(r_kind),allocatable,dimension(:,:,:):: sfc
-    real(r_kind),allocatable,dimension(:,:):: sfc1
-    integer(i_kind) iret,gfile_loc,i,k,len,ndim
+    real(r_kind),allocatable,dimension(:,:,:):: sfc1
+    integer(i_kind) iret,gfile_loc,i,k,len,ndim,ier,istatus
     integer(i_kind) ndimensions,nvariables,nattributes,unlimiteddimid
     integer(i_kind) kk,n,ns,j,ii,jj,mm1
       character(len=:),allocatable :: sfcdata   !='fv3_sfcdata'
@@ -755,12 +815,31 @@ subroutine gsi_fv3ncdf2d_read(fv3filenamegin,it,ges_z)
     sfcdata= fv3filenamegin%sfcdata
     dynvars= fv3filenamegin%dynvars
 
+    real(r_kind),dimension(:,:),pointer::ges_tsk_it=>NULL()
+    real(r_kind),dimension(:,:),pointer::ges_soilt1_it=>NULL()
+    integer(i_kind),allocatable:: ijns2d(:),displss2d(:)
+
     mm1=mype+1
-    allocate(a(nya,nxa))
+    allocate(a(nlat,nlon))
     allocate(work(itotsub*n2d))
     allocate( sfcn2d(lat2,lon2,n2d))
 
+    allocate(displss2d(npe), ijns2d(npe))
+
+    displss2d(1)=0
+    ijns2d(1)=ijn_s(1)*n2d 
+    do i=2,npe
+       ijns2d(i)=ijn_s(i)*n2d
+       displss2d(i)=displss2d(i-1) + ijns2d(i-1)
+    enddo
+
+    if(l_gsd_soiltq_nudge) then
+      call GSI_BundleGetPointer(GSI_MetGuess_Bundle(it), 'tsoil', ges_soilt1_it, istatus)
+      call GSI_BundleGetPointer(GSI_MetGuess_Bundle(it), 'tskn', ges_tsk_it, istatus)
+    endif
+
  if(mype==mype_2d ) then
+
     iret=nf90_open(sfcdata,nf90_nowrite,gfile_loc)
     if(iret/=nf90_noerr) then
        write(6,*)' problem opening3 ',trim(sfcdata),', Status = ',iret
@@ -772,9 +851,13 @@ subroutine gsi_fv3ncdf2d_read(fv3filenamegin,it,ges_z)
        iret=nf90_inquire_dimension(gfile_loc,k,name,len)
        dim(k)=len
     enddo
+
+
+
 !!!!!!!!!!!! read in 2d variables !!!!!!!!!!!!!!!!!!!!!!!!!!
     do i=ndimensions+1,nvariables
        iret=nf90_inquire_variable(gfile_loc,i,name,len)
+       write(6,*) "Looping through 2DVars ", trim(name)
        if( trim(name)=='f10m'.or.trim(name)=='F10M' ) then
           k=k_f10m
        else if( trim(name)=='stype'.or.trim(name)=='STYPE' ) then
@@ -793,8 +876,10 @@ subroutine gsi_fv3ncdf2d_read(fv3filenamegin,it,ges_z)
           k=k_stc 
        else if( trim(name)=='smc'.or.trim(name)=='SMC' ) then
           k=k_smc
-       else if( trim(name)=='SLMSK'.or.trim(name)=='slmsk' ) then
+       else if( trim(name)=='slmsk'.or.trim(name)=='SLMSK' ) then
           k=k_slmsk
+       else if( trim(name)=='tsnow'.or.trim(name)=='TSNOW' ) then
+          k=k_tsoil
        else
           cycle 
        endif
@@ -805,7 +890,10 @@ subroutine gsi_fv3ncdf2d_read(fv3filenamegin,it,ges_z)
        if(allocated(sfc       )) deallocate(sfc       )
        allocate(sfc(dim(dim_id(1)),dim(dim_id(2)),dim(dim_id(3))))
        iret=nf90_get_var(gfile_loc,i,sfc)
-       call fv3_h_to_ll(sfc(:,:,1),a,nx,ny,nxa,nya)
+       call fv3_h_to_ll(sfc(:,:,1),a,dim(dim_id(1)),dim(dim_id(2)),nlon,nlat)
+
+       write(6,*) 'Getting var READ: ', trim(name), k, minval(sfc), maxval(sfc)
+       write(6,*) 'Getting var REMAP: ', trim(name), k, minval(a), maxval(a)
 
        kk=0
        do n=1,npe
@@ -845,7 +933,7 @@ subroutine gsi_fv3ncdf2d_read(fv3filenamegin,it,ges_z)
           if(allocated(dim_id    )) deallocate(dim_id    )
           allocate(dim_id(ndim))
           iret=nf90_inquire_variable(gfile_loc,k,dimids=dim_id)
-          allocate(sfc1(dim(dim_id(1)),dim(dim_id(2))) )
+          allocate(sfc1(dim(dim_id(1)),dim(dim_id(2)),dim(dim_id(3))))
           iret=nf90_get_var(gfile_loc,k,sfc1)
           exit
        endif
@@ -853,7 +941,7 @@ subroutine gsi_fv3ncdf2d_read(fv3filenamegin,it,ges_z)
     iret=nf90_close(gfile_loc)
 
     k=k_orog
-    call fv3_h_to_ll(sfc1,a,nx,ny,nxa,nya)
+    call fv3_h_to_ll(sfc1(:,:,1),a,dim(dim_id(1)),dim(dim_id(2)),nlon,nlat)
 
     kk=0
     do n=1,npe
@@ -868,14 +956,20 @@ subroutine gsi_fv3ncdf2d_read(fv3filenamegin,it,ges_z)
     end do
 
     deallocate (dim_id,sfc,sfc1,dim)
- endif  ! mype
 
+ endif  ! mype
 
 !!!!!!! scatter !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
     call mpi_scatterv(work,ijns2d,displss2d,mpi_rtype,&
       sfcn2d,ijns2d(mm1),mpi_rtype,mype_2d,mpi_comm_world,ierror)
 
     deallocate ( work )
+    deallocate(displss2d)
+
+    if(l_gsd_soiltq_nudge) then
+        ges_soilt1_it(:,:) = sfcn2d(:,:,k_tsoil)
+        ges_tsk_it(:,:) = sfcn2d(:,:,k_tsea)
+    endif
 
     fact10(:,:,it)=sfcn2d(:,:,k_f10m)
     soil_type(:,:,it)=sfcn2d(:,:,k_stype)
@@ -887,7 +981,19 @@ subroutine gsi_fv3ncdf2d_read(fv3filenamegin,it,ges_z)
     soil_temp(:,:,it)=sfcn2d(:,:,k_stc)
     soil_moi(:,:,it)=sfcn2d(:,:,k_smc)
     ges_z(:,:)=sfcn2d(:,:,k_orog)/grav
-    isli(:,:,it)=nint(sfcn2d(:,:,k_slmsk))
+    isli(:,:,it)=sfcn2d(:,:,k_slmsk)
+
+    write(6,*) "in gsi_fv3ncdf2d_read ISLI", minval(isli), maxval(isli)
+    write(6,*) "in gsi_fv3ncdf2d_read FACT10", minval(FACT10), maxval(FACT10)
+    write(6,*) "in gsi_fv3ncdf2d_read SOIL_TYPE", minval(SOIL_TYPE),maxval(SOIL_TYPE)
+    write(6,*) "in gsi_fv3ncdf2d_read VFRAC", minval(veg_frac), maxval(veg_frac)
+    write(6,*) "in gsi_fv3ncdf2d_read veg_type", minval(veg_type), maxval(veg_type)
+    write(6,*) "in gsi_fv3ncdf2d_read sfc_rough", minval(sfc_rough),maxval(sfc_rough)
+    write(6,*) "in gsi_fv3ncdf2d_read sfct", minval(sfct), maxval(sfct)
+    write(6,*) "in gsi_fv3ncdf2d_read sno", minval(sno), maxval(sno)
+    write(6,*) "in gsi_fv3ncdf2d_read soil_temp", minval(soil_temp),maxval(soil_temp)
+    write(6,*) "in gsi_fv3ncdf2d_read soil_moi", minval(soil_moi), maxval(soil_moi)
+    write(6,*) "in gsi_fv3ncdf2d_read ges_z", minval(ges_z),maxval(ges_z)
     deallocate (sfcn2d,a)
     return
 end subroutine gsi_fv3ncdf2d_read
@@ -1007,10 +1113,13 @@ subroutine gsi_fv3ncdf_read(filenamein,varname,varname2,work_sub,mype_io)
 ! program history log:
 !
 !   input argument list:
-!     filename    - file name to read from       
+!     filenamein  - file name to read from       
 !     varname     - variable name to read in
 !     varname2    - variable name to read in
 !     mype_io     - pe to read in the field
+!
+!   optional argument list:
+!     rev_z       - if true, reverse z order when reading  (default)
 !
 !   output argument list:
 !     work_sub    - output sub domain field
@@ -1033,22 +1142,46 @@ subroutine gsi_fv3ncdf_read(filenamein,varname,varname2,work_sub,mype_io)
 
     implicit none
     character(*)   ,intent(in   ) :: varname,varname2,filenamein
-    real(r_kind)   ,intent(out  ) :: work_sub(lat2,lon2,nsig) 
+    real(r_kind), intent(inout  ), dimension(:,:,:)  :: work_sub
     integer(i_kind)   ,intent(in   ) :: mype_io
+    logical, intent(in), optional :: rev_z
     character(len=128) :: name
     real(r_kind),allocatable,dimension(:,:,:):: uu
     integer(i_kind),allocatable,dimension(:):: dim_id,dim
     real(r_kind),allocatable,dimension(:):: work
     real(r_kind),allocatable,dimension(:,:):: a
+    integer(i_kind),allocatable:: ijns(:),displss(:)
 
 
     integer(i_kind) n,ns,k,len,ndim
     integer(i_kind) gfile_loc,iret
     integer(i_kind) nz,nzp1,kk,j,mm1,i,ir,ii,jj
     integer(i_kind) ndimensions,nvariables,nattributes,unlimiteddimid
+    integer(i_kind) work_size(3)
+    logical reverse_z
 
+
+    if (present(rev_z)) then 
+        reverse_z = rev_z 
+    else
+        reverse_z = .true.
+    endif
+
+
+    write(6,*) 'Reading varname, rev_z = ', reverse_z
     mm1=mype+1
-    allocate (work(itotsub*nsig))
+
+
+    work_size = shape(work_sub)
+    allocate(work(itotsub*work_size(3)))
+
+    allocate(displss(npe),ijns(npe))
+    displss(1)=0
+    ijns(1)=ijn_s(1)*work_size(3)
+    do i=2,npe
+       ijns(i)=ijn_s(i)*work_size(3)
+       displss(i)=displss(i-1) + ijns(i-1)
+    enddo
 
     if(mype==mype_io ) then
        iret=nf90_open(trim(filenamein),nf90_nowrite,gfile_loc)
@@ -1067,10 +1200,9 @@ subroutine gsi_fv3ncdf_read(filenamein,varname,varname2,work_sub,mype_io)
           dim(k)=len
        enddo
 
-
        do k=ndimensions+1,nvariables
           iret=nf90_inquire_variable(gfile_loc,k,name,len)
-          if(trim(name)==varname .or. trim(name)==varname2) then
+          if((trim(name) .eq. varname ) .or. (trim(name) .eq. varname2)) then
              iret=nf90_inquire_variable(gfile_loc,k,ndims=ndim)
              if(allocated(dim_id    )) deallocate(dim_id    )
              allocate(dim_id(ndim))
@@ -1081,10 +1213,15 @@ subroutine gsi_fv3ncdf_read(filenamein,varname,varname2,work_sub,mype_io)
              exit
           endif
        enddo     !   k
-       nz=nsig
+       nz=dim(dim_id(3))
        nzp1=nz+1
+
        do i=1,nz
-          ir=nzp1-i
+          if (reverse_z) then 
+              ir=nzp1-i 
+          else
+              ir = i
+          endif
           call fv3_h_to_ll(uu(:,:,i),a,dim(dim_id(1)),dim(dim_id(2)),nlon,nlat)
           kk=0
           do n=1,npe
@@ -1099,6 +1236,7 @@ subroutine gsi_fv3ncdf_read(filenamein,varname,varname2,work_sub,mype_io)
           end do
        enddo ! i
 
+
        iret=nf90_close(gfile_loc)
        deallocate (uu,a,dim,dim_id)
 
@@ -1107,7 +1245,10 @@ subroutine gsi_fv3ncdf_read(filenamein,varname,varname2,work_sub,mype_io)
     call mpi_scatterv(work,ijns,displss,mpi_rtype,&
        work_sub,ijns(mm1),mpi_rtype,mype_io,mpi_comm_world,ierror)
 
-    deallocate (work)
+
+    if(allocated(work)) deallocate(work)
+    if(allocated(displss)) deallocate(displss)
+    if(allocated(ijns)) deallocate(ijns)
     return
 end subroutine gsi_fv3ncdf_read
 
@@ -1273,12 +1414,23 @@ subroutine gsi_fv3ncdf_readuv(dynvarsfile,ges_u,ges_v)
     real(r_kind),allocatable,dimension(:,:):: a
     real(r_kind),allocatable,dimension(:,:):: u,v
 
+    integer(i_kind),allocatable:: ijns(:),displss(:)
     integer(i_kind) n,ns,k,len,ndim
     integer(i_kind) gfile_loc,iret
     integer(i_kind) nz,nzp1,kk,j,mm1,i,ir,ii,jj
     integer(i_kind) ndimensions,nvariables,nattributes,unlimiteddimid
 
     allocate (work(itotsub*nsig))
+    allocate(displss(npe), ijns(npe))
+
+    displss(1)=0
+    ijns(1)=ijn_s(1)*nsig
+    do i=2,npe
+       ijns(i)=ijn_s(i)*nsig
+       displss(i)=displss(i-1) + ijns(i-1)
+    enddo
+
+
     mm1=mype+1
     if(mype==mype_u .or. mype==mype_v) then
        iret=nf90_open(dynvarsfile,nf90_nowrite,gfile_loc)
@@ -1326,6 +1478,8 @@ subroutine gsi_fv3ncdf_readuv(dynvarsfile,ges_u,ges_v)
 ! transfor to earth u/v, interpolate to analysis grid, reverse vertical order
        nz=nsig
        nzp1=nz+1
+
+
        do i=1,nz
           ir=nzp1-i 
           call fv3uv2earth(temp1(:,:,i),uu(:,:,i),nx,ny,u,v)
@@ -1349,14 +1503,19 @@ subroutine gsi_fv3ncdf_readuv(dynvarsfile,ges_u,ges_v)
        deallocate(temp1,a)
        deallocate (dim,dim_id,uu,v,u)
        iret=nf90_close(gfile_loc)
+
     endif ! mype
 
-!!  scatter to ges_u,ges_v !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+!!  scatter to ges_u,ges_v !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
     call mpi_scatterv(work,ijns,displss,mpi_rtype,&
          ges_u,ijns(mm1),mpi_rtype,mype_u,mpi_comm_world,ierror)
     call mpi_scatterv(work,ijns,displss,mpi_rtype,&
          ges_v,ijns(mm1),mpi_rtype,mype_v,mpi_comm_world,ierror)
-    deallocate(work)
+
+    if(allocated(work))deallocate(work)
+    if(allocated(displss)) deallocate(displss)
+    if(allocated(ijns)) deallocate(ijns)
+    return
 end subroutine gsi_fv3ncdf_readuv
 subroutine gsi_fv3ncdf_readuv_v1(dynvarsfile,ges_u,ges_v)
 !$$$  subprogram documentation block
@@ -1511,10 +1670,12 @@ subroutine wrfv3_netcdf(fv3filenamegin)
 !
 !$$$
     use kinds, only: r_kind,i_kind
+    use gridmod, only: nsig_soil
     use guess_grids, only: ntguessig,ges_tsen
     use gsi_metguess_mod, only: gsi_metguess_bundle
     use gsi_bundlemod, only: gsi_bundlegetpointer
     use mpeu_util, only: die
+    use rapidrefresh_cldsurf_mod, only: l_gsd_soiltq_nudge
     implicit none
     type (type_fv3regfilenameg),intent(in) :: fv3filenamegin
 
@@ -1531,30 +1692,50 @@ subroutine wrfv3_netcdf(fv3filenamegin)
     dynvars=fv3filenamegin%dynvars
     tracers=fv3filenamegin%tracers
 
+    real(r_kind),pointer,dimension(:,:  ):: ges_tsk    =>NULL()
+    real(r_kind),pointer,dimension(:,:  ):: ges_tsoil  =>NULL()
+    real(r_kind),pointer,dimension(:,:,:):: ges_smois  =>NULL()
+    real(r_kind),pointer,dimension(:,:,:):: ges_tslb   =>NULL()
+
     it=ntguessig
     ier=0
     call GSI_BundleGetPointer ( GSI_MetGuess_Bundle(it), 'ps' ,ges_ps ,istatus );ier=ier+istatus
     call GSI_BundleGetPointer ( GSI_MetGuess_Bundle(it), 'u' , ges_u ,istatus);ier=ier+istatus
     call GSI_BundleGetPointer ( GSI_MetGuess_Bundle(it), 'v' , ges_v ,istatus);ier=ier+istatus
     call GSI_BundleGetPointer ( GSI_MetGuess_Bundle(it), 'q'  ,ges_q ,istatus);ier=ier+istatus
+
+    if(l_gsd_soiltq_nudge) then
+        call GSI_BundleGetPointer(GSI_MetGuess_Bundle(it), 'tskn',  ges_tsk, istatus);ier=ier+istatus
+        call GSI_BundleGetPointer(GSI_MetGuess_Bundle(it), 'tsoil', ges_tsoil, istatus);ier=ier+istatus
+        call GSI_BundleGetPointer(GSI_MetGuess_Bundle(it), 'smoist', ges_smois, istatus);ier=ier+istatus
+        call GSI_BundleGetPointer(GSI_MetGuess_Bundle(it), 'tslb',  ges_tslb, istatus);ier=ier+istatus
+    endif
+
     if (ier/=0) call die('get ges','cannot get pointers for fv3 met-fields, ier =',ier)
 
     add_saved=.true.
 
 !   write out
     if( fv3sar_bg_opt == 0) then
-      call gsi_fv3ncdf_write(dynvars,'T',ges_tsen(1,1,1,it),mype_t,add_saved)
+      call gsi_fv3ncdf_write(dynvars,'T',ges_tsen(:,:,:,it),mype_t,add_saved)
       call gsi_fv3ncdf_write(tracers,'sphum',ges_q   ,mype_q,add_saved)
       call gsi_fv3ncdf_writeuv(dynvars,ges_u,ges_v,mype_v,add_saved)
       call gsi_fv3ncdf_writeps(dynvars,'delp',ges_ps,mype_p,add_saved)
     else
-      call gsi_fv3ncdf_write(dynvars,'t',ges_tsen(1,1,1,it),mype_t,add_saved)
+      call gsi_fv3ncdf_write(dynvars,'t',ges_tsen(:,:,:,it),mype_t,add_saved)
       call gsi_fv3ncdf_write(tracers,'sphum',ges_q   ,mype_q,add_saved)
       call gsi_fv3ncdf_writeuv_v1(dynvars,ges_u,ges_v,mype_v,add_saved)
       call gsi_fv3ncdf_writeps_v1(dynvars,'ps',ges_ps,mype_p,add_saved)
     
     endif
     
+
+    if(l_gsd_soiltq_nudge) then
+        call gsi_fv3ncdf_write(sfcdata,'tsea',  ges_tsk,   mype_q, add_saved, nlevs_in=1)
+        call gsi_fv3ncdf_write(sfcdata,'tsnow', ges_tsoil, mype_q, add_saved, nlevs_in=1)
+        call gsi_fv3ncdf_write(sfcdata,'smois', ges_smois, mype_q, add_saved, nlevs_in=nsig_soil)
+        call gsi_fv3ncdf_write(sfcdata,'tslb',  ges_tslb,  mype_q, add_saved, nlevs_in=nsig_soil)
+    endif
 end subroutine wrfv3_netcdf
 
 subroutine gsi_fv3ncdf_writeuv(dynvars,varu,varv,mype_io,add_saved)
@@ -1608,10 +1789,20 @@ subroutine gsi_fv3ncdf_writeuv(dynvars,varu,varv,mype_io,add_saved)
     real(r_kind),allocatable,dimension(:,:,:):: work_bu,work_bv
     real(r_kind),allocatable,dimension(:,:):: u,v,workau2,workav2
     real(r_kind),allocatable,dimension(:,:):: workbu2,workbv2
+    integer(i_kind),allocatable:: ijnz(:),displsz_g(:)
 
     mm1=mype+1
 
     allocate(    work(max(iglobal,itotsub)*nsig),work_sub(lat1,lon1,nsig))
+
+    allocate(displsz_g(npe), ijnz(npe))
+
+    displsz_g(1)=0
+    ijnz(1)=ijn(1)*nsig
+    do i=2,npe
+       ijnz(i)=ijn(i)*nsig
+       displsz_g(i)=displsz_g(i-1) + ijnz(i-1)
+    enddo
 !!!!!! gather analysis u !! revers k !!!!!!!!!!!
     do k=1,nsig
        kr=nsig+1-k
@@ -1649,6 +1840,10 @@ subroutine gsi_fv3ncdf_writeuv(dynvars,varu,varv,mype_io,add_saved)
     call mpi_gatherv(work_sub,ijnz(mm1),mpi_rtype, &
           work,ijnz,displsz_g,mpi_rtype,mype_io,mpi_comm_world,ierror)
 
+
+    if(allocated(displsz_g)) deallocate(displsz_g)
+    if(allocated(ijnz)) deallocate(ijnz)
+
     if(mype==mype_io) then
        ns=0
        do m=1,npe
@@ -1676,7 +1871,7 @@ subroutine gsi_fv3ncdf_writeuv(dynvars,varu,varv,mype_io,add_saved)
           call check( nf90_get_var(gfile_loc,ugrd_VarId,work_bu) )
           call check( nf90_get_var(gfile_loc,vgrd_VarId,work_bv) )
           do k=1,nsig
-             call fv3uv2earth(work_bu(1,1,k),work_bv(1,1,k),nlon_regional,nlat_regional,u,v)
+             call fv3uv2earth(work_bu(:,:,k),work_bv(:,:,k),nlon_regional,nlat_regional,u,v)
              call fv3_h_to_ll(u,workau2,nlon_regional,nlat_regional,nlon,nlat)
              call fv3_h_to_ll(v,workav2,nlon_regional,nlat_regional,nlon,nlat)
 !!!!!!!! find analysis_inc:  work_a !!!!!!!!!!!!!!!!
@@ -2140,7 +2335,7 @@ subroutine gsi_fv3ncdf_writeps_v1(filename,varname,var,mype_io,add_saved)
     deallocate(work,work_sub)
 end subroutine gsi_fv3ncdf_writeps_v1
 
-subroutine gsi_fv3ncdf_write(filename,varname,var,mype_io,add_saved)
+subroutine gsi_fv3ncdf_write(filename,varname,var,mype_io,add_saved,nlevs_in)
 !$$$  subprogram documentation block
 !                .      .    .                                        .
 ! subprogram:    gsi_nemsio_write
@@ -2175,25 +2370,42 @@ subroutine gsi_fv3ncdf_write(filename,varname,var,mype_io,add_saved)
     use netcdf, only: nf90_put_var,nf90_get_var
     implicit none
 
-    real(r_kind)   ,intent(in   ) :: var(lat2,lon2,nsig)
+    real(r_kind)   ,intent(in   ) :: var(lat2,lon2,*)
     integer(i_kind),intent(in   ) :: mype_io
     logical        ,intent(in   ) :: add_saved
     character(*)   ,intent(in   ) :: varname,filename
+    integer(i_kind),intent(in   ), optional :: nlevs_in
 
     integer(i_kind) :: VarId,gfile_loc
-    integer(i_kind) i,j,mm1,k,kr,ns,n,m
+    integer(i_kind) i,j,mm1,k,kr,ns,n,m,nlevs
     real(r_kind),allocatable,dimension(:):: work
     real(r_kind),allocatable,dimension(:,:,:):: work_sub,work_a
     real(r_kind),allocatable,dimension(:,:,:):: work_b
     real(r_kind),allocatable,dimension(:,:):: workb2,worka2
 
+    integer(i_kind),allocatable:: ijnz(:),displsz_g(:)
 
+    if(present(nlevs_in)) then
+        nlevs = nlevs_in
+    else
+        nlevs = nsig
+    endif
+
+    allocate(displsz_g(npe), ijnz(npe))
+
+    displsz_g(1)=0
+    ijnz(1)=ijn(1)*nlevs
+    do i=2,npe
+       ijnz(i)=ijn(i)*nlevs
+       displsz_g(i)=displsz_g(i-1) + ijnz(i-1)
+    enddo
     mm1=mype+1
 
-    allocate(    work(max(iglobal,itotsub)*nsig),work_sub(lat1,lon1,nsig))
+    allocate(    work(max(iglobal,itotsub)*nlevs),work_sub(lat1,lon1,nlevs))
+
 !!!!!!!! reverse z !!!!!!!!!!!!!!
-    do k=1,nsig
-       kr=nsig+1-k
+    do k=1,nlevs
+       kr=nlevs+1-k
        do i=1,lon1
           do j=1,lat1
              work_sub(j,i,kr)=var(j+1,i+1,k)
@@ -2203,11 +2415,14 @@ subroutine gsi_fv3ncdf_write(filename,varname,var,mype_io,add_saved)
     call mpi_gatherv(work_sub,ijnz(mm1),mpi_rtype, &
           work,ijnz,displsz_g,mpi_rtype,mype_io,mpi_comm_world,ierror)
 
+    if(allocated(displsz_g)) deallocate(displsz_g)
+    if(allocated(ijnz)) deallocate(ijnz)
+
     if(mype==mype_io) then
-       allocate( work_a(nlat,nlon,nsig))
+       allocate( work_a(nlat,nlon,nlevs))
        ns=0
        do m=1,npe
-          do k=1,nsig
+          do k=1,nlevs
              do n=displs_g(m)+1,displs_g(m)+ijn(m) 
                 ns=ns+1
                 work_a(ltosi(n),ltosj(n),k)=work(ns)
@@ -2215,7 +2430,7 @@ subroutine gsi_fv3ncdf_write(filename,varname,var,mype_io,add_saved)
           enddo
        enddo
 
-       allocate( work_b(nlon_regional,nlat_regional,nsig))
+       allocate( work_b(nlon_regional,nlat_regional,nlevs))
 
        call check( nf90_open(trim(filename),nf90_write,gfile_loc) )
        call check( nf90_inq_varid(gfile_loc,trim(varname),VarId) )
@@ -2226,17 +2441,17 @@ subroutine gsi_fv3ncdf_write(filename,varname,var,mype_io,add_saved)
           allocate( worka2(nlat,nlon))
           call check( nf90_get_var(gfile_loc,VarId,work_b) )
 
-          do k=1,nsig
+          do k=1,nlevs
              call fv3_h_to_ll(work_b(:,:,k),worka2,nlon_regional,nlat_regional,nlon,nlat)
 !!!!!!!! analysis_inc:  work_a !!!!!!!!!!!!!!!!
              work_a(:,:,k)=work_a(:,:,k)-worka2(:,:)
-             call fv3_ll_to_h(work_a(1,1,k),workb2,nlon,nlat,nlon_regional,nlat_regional,.true.)
+             call fv3_ll_to_h(work_a(:,:,k),workb2,nlon,nlat,nlon_regional,nlat_regional,.true.)
              work_b(:,:,k)=work_b(:,:,k)+workb2(:,:)
           enddo
           deallocate(worka2,workb2)
        else
-          do k=1,nsig
-             call fv3_ll_to_h(work_a(1,1,k),work_b(1,1,k),nlon,nlat,nlon_regional,nlat_regional,.true.)
+          do k=1,nlevs
+             call fv3_ll_to_h(work_a(:,:,k),work_b(:,:,k),nlon,nlat,nlon_regional,nlat_regional,.true.)
           enddo
        endif
 

@@ -64,7 +64,7 @@ module mod_fv3_lola
   private
   public :: generate_anl_grid,fv3_h_to_ll,fv3_ll_to_h,fv3uv2earth,earthuv2fv3
   public :: fv3dx,fv3dx1,fv3dy,fv3dy1,fv3ix,fv3ixp,fv3jy,fv3jyp,a3dx,a3dx1,a3dy,a3dy1,a3ix,a3ixp,a3jy,a3jyp
-  public :: nxa,nya,cangu,sangu,cangv,sangv,nx,ny,bilinear
+  public :: nxa,nya,cangu,sangu,cangv,sangv,bilinear
 
   logical bilinear
   integer(i_kind) nxa,nya,nx,ny
@@ -305,15 +305,19 @@ subroutine generate_anl_grid(nx,ny,grid_lon,grid_lont,grid_lat,grid_latt)
 !!!!!! fv3 rotated grid; not equal spacing, non_orthogonal !!!!!!
   do j=1,ny
      jr=ny+1-j
+     !jr=j
      do i=1,nx
         ir=nx+1-i
+        !ir=i
         xbh_b(ir,jr)=gcrlon(i,j)/dlon
      end do
   end do
   do j=1,ny
      jr=ny+1-j
+     !jr=j
      do i=1,nx
        ir=nx+1-i
+       !ir=i
        ybh_b(ir,jr)=gcrlat(i,j)/dlat
      end do
   end do
@@ -343,7 +347,7 @@ subroutine generate_anl_grid(nx,ny,grid_lon,grid_lont,grid_lat,grid_latt)
          else if(gxa > xbh_b(nx,jb1))then
             gxa= nx
          else
-            call grdcrd1(gxa,xbh_b(1,jb1),nx,1)
+            call grdcrd1(gxa,xbh_b(:,jb1),nx,1)
          endif
          ib2=ib1
          ib1=gxa

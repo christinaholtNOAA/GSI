@@ -68,8 +68,10 @@ subroutine gsd_update_soil_tq(tinc,is_t,qinc,is_q,it)
   use constants, only: partialSnowThreshold,t0c
   use gridmod, only: lat2,lon2,nsig,nsig_soil
   use gridmod, only: regional_time
+  use gridmod, only: fv3_regional
   use guess_grids, only: ges_tsen,sno,coast_prox
   use wrf_mass_guess_mod, only: ges_xlon,ges_xlat
+  use gsi_rfv3io_mod, only: grid_lont, grid_latt, n_soil_lev
   use guess_grids, only: ges_prsl
 ! use guess_grids, only: nfldsig
   use rapidrefresh_cldsurf_mod, only: l_gsd_soiltq_nudge
@@ -106,10 +108,14 @@ subroutine gsd_update_soil_tq(tinc,is_t,qinc,is_q,it)
   real(r_kind),dimension(:,:,:),pointer:: ges_smois =>NULL()
   real(r_kind),dimension(:,:,:),pointer:: ges_q     =>NULL()
 
+  real(r_kind),dimension(lat2,lon2) :: xlon, xlat
+  integer(i_kind) :: nsoil
   integer(i_kind) :: itsig
   
 !*******************************************************************************
 !
+
+  write(6,*) "TINC in SOIL UPDATE: ", tinc(1:10,1:10)
 
   snowthreshold=1.0e-10_r_kind
   itsig=it
@@ -132,10 +138,22 @@ subroutine gsd_update_soil_tq(tinc,is_t,qinc,is_q,it)
 !
 !  csza = fraction of solar constant (cos of zenith angle)
    gmt = regional_time(4)   ! UTC 
+
+   if (fv3_regional) then
+       write(6,*) "Setting xlon/xlat to FV3"
+       xlon = grid_lont - 360
+       xlat = grid_latt
+       nsoil = n_soil_lev
+   else
+       write(6,*) "Setting xlon/xlat to WRF"
+       xlon = ges_xlon(:,:,1)
+       xlat = ges_xlat(:,:,1)
+       nsoil = nsig_soil
+   endif
    do j=2,lon2
      do i=1,lat2   
-       hrang=15._r_kind*gmt*deg2rad + ges_xlon(i,j,1) - pi
-       xxlat=ges_xlat(i,j,1)
+       hrang=15._r_kind*gmt*deg2rad + xlon(i,j) - pi
+       xxlat=xlat(i,j)
        csza(i,j)=sin(xxlat)*sin(declin)                &
                 +cos(xxlat)*cos(declin)*cos(hrang)
      end do
@@ -191,8 +209,9 @@ subroutine gsd_update_soil_tq(tinc,is_t,qinc,is_q,it)
 
 ! mhu, Jan 15,2015: move the land/sea masck check to fine grid update step
               tincf = ainc*temp_fac*coast_fac
+              if(tincf .ne. 0.0) write(6,*) "COAST_FAC: ", coast_fac
 ! mhu and Tanya: Jan 14, 2015: do T soil nudging over snow
-              if(nsig_soil == 9) then
+              if(nsoil == 9) then
 ! - top level soil temp
                  ges_tslb(i,j,1) = ges_tslb(i,j,1) +   &
                                  min(1._r_kind,max(dts_min,tincf*0.6_r_kind)) 
@@ -340,7 +359,7 @@ subroutine gsd_update_soil_tq(tinc,is_t,qinc,is_q,it)
                                    ges_smois(i,j,1) + min(0.03_r_kind,max(0._r_kind,(ainc*0.2_r_kind))))
                        ges_smois(i,j,2) = min (max(ges_smois(i,j,2),ges_smois(i,j,3)), &
                                    ges_smois(i,j,2) + min(0.03_r_kind,max(0._r_kind,(ainc*0.2_r_kind))))
-                       if(nsig_soil == 9) then
+                       if(nsoil == 9) then
                           ges_smois(i,j,3) = min (max(ges_smois(i,j,3),ges_smois(i,j,4)), &
                                    ges_smois(i,j,3) + min(0.03_r_kind,max(0._r_kind,(ainc*0.2_r_kind))))
                           ges_smois(i,j,4) = min (max(ges_smois(i,j,4),ges_smois(i,j,5)), &  
@@ -367,7 +386,7 @@ subroutine gsd_update_soil_tq(tinc,is_t,qinc,is_q,it)
                                                   max(-0.03_r_kind,min(0._r_kind,(ainc*0.2_r_kind))))
                         ges_smois(i,j,2) = max(0.0_r_kind,ges_smois(i,j,2) + & 
                                                   max(-0.03_r_kind,min(0._r_kind,(ainc*0.2_r_kind))))
-                        if(nsig_soil == 9) then
+                        if(nsoil == 9) then
                            ges_smois(i,j,3) = max(0.0_r_kind,ges_smois(i,j,3) + & 
                                                   max(-0.03_r_kind,min(0._r_kind,(ainc*0.2_r_kind))))
                            ges_smois(i,j,4) = max(0.0_r_kind,ges_smois(i,j,4) + & 
@@ -675,6 +694,8 @@ subroutine gsd_gen_coast_prox
            worksub(ii)=isli(i,j,1)
         end do
      end do
+
+     write(6,*) "IN gsd_gen_coast_prox ISLI",minval(worksub), maxval(worksub) 
 
      call general_gather2grid(g1,worksub,hwork,workpe)
 
