@@ -74,7 +74,6 @@ module gsi_rfv3io_mod
   public :: wrfv3_netcdf
   public :: gsi_fv3ncdf2d_read_v1
 
-  public :: grid_spec, ak_bk, dynvars, tracers, sfcdata
   public :: mype_u,mype_v,mype_t,mype_q,mype_p,mype_oz,mype_ql
   public :: k_slmsk,k_tsea,k_vfrac,k_vtype,k_stype,k_zorl,k_smc,k_stc
   public :: k_snwdph,k_f10m,mype_2d,n2d,k_orog,k_psfc
@@ -96,7 +95,7 @@ module gsi_rfv3io_mod
     k_smc  =9,                  &   !soil_moi
     k_slmsk=10,                 &   !isli
     k_orog =11,                 & !terrain
-    k_tsoil=12                  & !soilt1
+    k_tsoil=12,                 & !soilt1
     n2d=12                   )
 
 contains
@@ -328,7 +327,7 @@ subroutine gsi_rfv3io_get_grid_specs(fv3filenamegin,ierr)
 end subroutine gsi_rfv3io_get_grid_specs
 
 
-subroutine gsi_rfv3io_get_soil_levs(ierr)
+subroutine gsi_rfv3io_get_soil_levs(fv3filenamegin,ierr)
 !$$$  subprogram documentation block
 !                .      .    .                                        .
 ! subprogram:    gsi_rfv3io_get_soil_levs
@@ -358,6 +357,12 @@ subroutine gsi_rfv3io_get_soil_levs(ierr)
     integer(i_kind) ierr,iret,gfile_loc,i,k,dim_size
     integer(i_kind) ndimensions,nvariables,nattributes,unlimiteddimid
     character(len=128) :: varname
+    type (type_fv3regfilenameg) :: fv3filenamegin
+    character(:),allocatable    :: grid_spec
+    character(:),allocatable    :: sfcdata
+
+    grid_spec=fv3filenamegin%grid_spec
+    sfcdata=fv3filenamegin%sfcdata
 
     ! Open surface data file
     ierr=0
@@ -667,10 +672,12 @@ subroutine read_fv3_netcdf_guess(fv3filenamegin)
     real(r_kind),dimension(:,:,:),pointer::ges_tslb_it=>NULL()
 
     character(len=:),allocatable :: dynvars   !='fv3_dynvars'
+    character(len=:),allocatable :: sfcdata   !='fv3_sfcdata'
     character(len=:),allocatable :: tracers   !='fv3_tracer'
 
 
     dynvars= fv3filenamegin%dynvars
+    sfcdata= fv3filenamegin%sfcdata
     tracers= fv3filenamegin%tracers
 
     if(npe< 8) then
@@ -704,13 +711,13 @@ subroutine read_fv3_netcdf_guess(fv3filenamegin)
        call gsi_fv3ncdf_readuv_v1(dynvars,ges_u,ges_v)
     endif
     if( fv3sar_bg_opt == 0) then 
-       call gsi_fv3ncdf_read(dynvars,'T','t',ges_tsen(1,1,1,it),mype_t)
+       call gsi_fv3ncdf_read(dynvars,'T','t',ges_tsen(:,:,:,it),mype_t)
     else
-       call gsi_fv3ncdf_read_v1(dynvars,'t','T',ges_tsen(1,1,1,it),mype_t)
+       call gsi_fv3ncdf_read_v1(dynvars,'t','T',ges_tsen(:,:,:,it),mype_t)
     endif
 
     if( fv3sar_bg_opt == 0) then 
-       call gsi_fv3ncdf_read(dynvars,'DELP','delp',ges_prsi,mype_p)
+       call gsi_fv3ncdf_read(dynvars,'DELP','delp',ges_prsi(:,:,:,it),mype_p)
        ges_prsi(:,:,nsig+1,it)=eta1_ll(nsig+1)
        do i=nsig,1,-1
           ges_prsi(:,:,i,it)=ges_prsi(:,:,i,it)*0.001_r_kind+ges_prsi(:,:,i+1,it)
@@ -809,15 +816,15 @@ subroutine gsi_fv3ncdf2d_read(fv3filenamegin,it,ges_z)
     integer(i_kind) iret,gfile_loc,i,k,len,ndim,ier,istatus
     integer(i_kind) ndimensions,nvariables,nattributes,unlimiteddimid
     integer(i_kind) kk,n,ns,j,ii,jj,mm1
-      character(len=:),allocatable :: sfcdata   !='fv3_sfcdata'
-      character(len=:),allocatable :: dynvars   !='fv3_dynvars'
-
-    sfcdata= fv3filenamegin%sfcdata
-    dynvars= fv3filenamegin%dynvars
+    character(len=:),allocatable :: sfcdata   !='fv3_sfcdata'
+    character(len=:),allocatable :: dynvars   !='fv3_dynvars'
 
     real(r_kind),dimension(:,:),pointer::ges_tsk_it=>NULL()
     real(r_kind),dimension(:,:),pointer::ges_soilt1_it=>NULL()
     integer(i_kind),allocatable:: ijns2d(:),displss2d(:)
+
+    sfcdata= fv3filenamegin%sfcdata
+    dynvars= fv3filenamegin%dynvars
 
     mm1=mype+1
     allocate(a(nlat,nlon))
@@ -1102,7 +1109,7 @@ subroutine gsi_fv3ncdf2d_read_v1(filenamein,varname,varname2,work_sub,mype_io)
     return
 end subroutine  gsi_fv3ncdf2d_read_v1 
 
-subroutine gsi_fv3ncdf_read(filenamein,varname,varname2,work_sub,mype_io)
+subroutine gsi_fv3ncdf_read(filenamein,varname,varname2,work_sub,mype_io,rev_z)
 !$$$  subprogram documentation block
 !                .      .    .                                       .
 ! subprogram:    gsi_fv3ncdf_read       
@@ -1170,7 +1177,6 @@ subroutine gsi_fv3ncdf_read(filenamein,varname,varname2,work_sub,mype_io)
 
     write(6,*) 'Reading varname, rev_z = ', reverse_z
     mm1=mype+1
-
 
     work_size = shape(work_sub)
     allocate(work(itotsub*work_size(3)))
@@ -1300,7 +1306,8 @@ subroutine gsi_fv3ncdf_read_v1(filenamein,varname,varname2,work_sub,mype_io)
     integer(i_kind),allocatable,dimension(:):: dim
     real(r_kind),allocatable,dimension(:):: work
     real(r_kind),allocatable,dimension(:,:):: a
-
+    integer(i_kind),allocatable:: ijns(:),displss(:)
+    integer(i_kind) work_size(3)
 
     integer(i_kind) n,ns,k,len,var_id
     integer(i_kind) gfile_loc,iret
@@ -1309,6 +1316,18 @@ subroutine gsi_fv3ncdf_read_v1(filenamein,varname,varname2,work_sub,mype_io)
 
     mm1=mype+1
     allocate (work(itotsub*nsig))
+
+    work_size = shape(work_sub)
+    allocate(work(itotsub*work_size(3)))
+
+    allocate(displss(npe),ijns(npe))
+    displss(1)=0
+    ijns(1)=ijn_s(1)*work_size(3)
+    do i=2,npe
+       ijns(i)=ijn_s(i)*work_size(3)
+       displss(i)=displss(i-1) + ijns(i-1)
+    enddo
+
 
     if(mype==mype_io ) then
        iret=nf90_open(trim(filenamein),nf90_nowrite,gfile_loc)
@@ -1560,6 +1579,7 @@ subroutine gsi_fv3ncdf_readuv_v1(dynvarsfile,ges_u,ges_v)
     real(r_kind),allocatable,dimension(:):: work
     real(r_kind),allocatable,dimension(:,:):: a
     real(r_kind),allocatable,dimension(:,:):: uorv
+    integer(i_kind),allocatable:: ijns(:),displss(:)
 
     integer(i_kind) n,ns,k,len,ndim,var_id
     integer(i_kind) gfile_loc,iret
@@ -1567,6 +1587,15 @@ subroutine gsi_fv3ncdf_readuv_v1(dynvarsfile,ges_u,ges_v)
     integer(i_kind) ndimensions,nvariables,nattributes,unlimiteddimid
 
     allocate (work(itotsub*nsig))
+    allocate(displss(npe), ijns(npe))
+
+    displss(1)=0
+    ijns(1)=ijn_s(1)*nsig
+    do i=2,npe
+       ijns(i)=ijn_s(i)*nsig
+       displss(i)=displss(i-1) + ijns(i-1)
+    enddo
+
     mm1=mype+1
     if(mype==mype_u .or. mype==mype_v) then
        iret=nf90_open(dynvarsfile,nf90_nowrite,gfile_loc)
@@ -1683,19 +1712,22 @@ subroutine wrfv3_netcdf(fv3filenamegin)
     logical add_saved
       character(len=:),allocatable :: dynvars   !='fv3_dynvars'
       character(len=:),allocatable :: tracers   !='fv3_tracer'
+      character(len=:),allocatable :: sfcdata   !='fv3_sfcdata'
  ! variables for cloud info
     integer(i_kind) ier,istatus,it
     real(r_kind),pointer,dimension(:,:  ):: ges_ps  =>NULL()
     real(r_kind),pointer,dimension(:,:,:):: ges_u   =>NULL()
     real(r_kind),pointer,dimension(:,:,:):: ges_v   =>NULL()
     real(r_kind),pointer,dimension(:,:,:):: ges_q   =>NULL()
-    dynvars=fv3filenamegin%dynvars
-    tracers=fv3filenamegin%tracers
-
     real(r_kind),pointer,dimension(:,:  ):: ges_tsk    =>NULL()
     real(r_kind),pointer,dimension(:,:  ):: ges_tsoil  =>NULL()
     real(r_kind),pointer,dimension(:,:,:):: ges_smois  =>NULL()
     real(r_kind),pointer,dimension(:,:,:):: ges_tslb   =>NULL()
+
+    dynvars=fv3filenamegin%dynvars
+    sfcdata=fv3filenamegin%sfcdata
+    tracers=fv3filenamegin%tracers
+
 
     it=ntguessig
     ier=0
@@ -1794,7 +1826,6 @@ subroutine gsi_fv3ncdf_writeuv(dynvars,varu,varv,mype_io,add_saved)
     mm1=mype+1
 
     allocate(    work(max(iglobal,itotsub)*nsig),work_sub(lat1,lon1,nsig))
-
     allocate(displsz_g(npe), ijnz(npe))
 
     displsz_g(1)=0
@@ -2065,6 +2096,7 @@ subroutine gsi_fv3ncdf_writeuv_v1(dynvars,varu,varv,mype_io,add_saved)
     integer(i_kind) :: u_wgrd_VarId,v_wgrd_VarId
     integer(i_kind) :: u_sgrd_VarId,v_sgrd_VarId
     integer(i_kind) i,j,mm1,n,k,ns,kr,m
+    integer(i_kind),allocatable:: ijnz(:),displsz_g(:)
     real(r_kind),allocatable,dimension(:):: work
     real(r_kind),allocatable,dimension(:,:,:):: work_sub,work_au,work_av
     real(r_kind),allocatable,dimension(:,:,:):: work_bu_s,work_bv_s
@@ -2074,6 +2106,15 @@ subroutine gsi_fv3ncdf_writeuv_v1(dynvars,varu,varv,mype_io,add_saved)
     real(r_kind),allocatable,dimension(:,:):: workbu_w2,workbv_w2
 
     mm1=mype+1
+
+    allocate(displsz_g(npe), ijnz(npe))
+
+    displsz_g(1)=0
+    ijnz(1)=ijn(1)*nsig
+    do i=2,npe
+       ijnz(i)=ijn(i)*nsig
+       displsz_g(i)=displsz_g(i-1) + ijnz(i-1)
+    enddo
 
     allocate(    work(max(iglobal,itotsub)*nsig),work_sub(lat1,lon1,nsig))
 !!!!!! gather analysis u !! revers k !!!!!!!!!!!
